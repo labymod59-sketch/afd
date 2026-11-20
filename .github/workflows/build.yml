@@ -1,0 +1,227 @@
+# Ember build.
+#
+# The repository holds only the Ember changes (folder ember-overlay/).
+# On every run the workflow clones AyuGram Desktop (with all submodules),
+# copies ember-overlay/ over it and builds.
+#
+# Secrets (Settings -> Secrets and variables -> Actions), optional but recommended:
+#   EMBER_API_ID, EMBER_API_HASH - your own keys from https://my.telegram.org/apps
+# Without them the public sample keys from the build docs are used (fine for
+# a quick test, but Telegram may limit them; use your own).
+
+name: Build Ember
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_version:
+        description: "AyuGram Desktop version to build on (the overlay was made for 7.2.9)"
+        default: "7.2.9"
+        required: true
+      build_linux:
+        description: "Build Linux x64"
+        type: boolean
+        default: true
+      build_windows:
+        description: "Build Windows x64 (slow, 3-5 hours, may need a re-run)"
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "v*"
+
+env:
+  UPSTREAM_REPO: https://github.com/AyuGram/AyuGramDesktop.git
+  UPSTREAM_VERSION: ${{ inputs.upstream_version || '7.2.9' }}
+  API_ID: ${{ secrets.EMBER_API_ID || '2040' }}
+  API_HASH: ${{ secrets.EMBER_API_HASH || 'b18441a1ff607e10a989891a5462e627' }}
+
+jobs:
+  linux:
+    name: Linux x64
+    if: ${{ github.event_name == 'push' || inputs.build_linux }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - name: Clone Ember overlay
+        uses: actions/checkout@v4
+        with:
+          path: ember
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Clone AyuGram Desktop with submodules
+        run: |
+          set -e
+          for ref in "v$UPSTREAM_VERSION" "$UPSTREAM_VERSION"; do
+            if git ls-remote --exit-code --tags "$UPSTREAM_REPO" "refs/tags/$ref" >/dev/null 2>&1; then
+              TAG="$ref"; break
+            fi
+          done
+          if [ -z "$TAG" ]; then
+            echo "::error::No tag for AyuGram Desktop $UPSTREAM_VERSION found. Check the version input."
+            exit 1
+          fi
+          git clone --recursive --branch "$TAG" "$UPSTREAM_REPO" tdesktop
+
+      - name: Apply Ember overlay
+        run: |
+          set -e
+          while read -r f; do [ -n "$f" ] && rm -f "tdesktop/$f"; done < ember/ember-overlay/.deleted
+          cp -a ember/ember-overlay/. tdesktop/
+          rm -f tdesktop/.deleted
+          grep -n "Ember" tdesktop/Telegram/CMakeLists.txt | head -3
+
+      - name: Build
+        run: |
+          cd tdesktop
+          docker run --rm \
+            -u "$(id -u)" \
+            -v "$PWD:/usr/src/tdesktop" \
+            ghcr.io/telegramdesktop/tdesktop/centos_env:latest \
+            /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
+            -D TDESKTOP_API_ID="$API_ID" \
+            -D TDESKTOP_API_HASH="$API_HASH"
+
+      - name: Collect
+        run: |
+          set -e
+          cd tdesktop
+          BIN=$(find out -type f -name Ember -perm -u+x | head -1)
+          test -n "$BIN" || { echo "::error::Ember binary not found"; find out -maxdepth 3; exit 1; }
+          mkdir -p ../dist
+          strip "$BIN" || true
+          cp "$BIN" ../dist/Ember
+          tar -C ../dist -czf ../Ember-linux-x64.tar.gz Ember
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ember-linux-x64
+          path: Ember-linux-x64.tar.gz
+
+  windows:
+    name: Windows x64
+    if: ${{ github.event_name == 'push' || inputs.build_windows }}
+    runs-on: windows-2025
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: cmd
+    env:
+      BUILD_PATH: C:\TBuild
+    steps:
+      - name: Clone Ember overlay
+        uses: actions/checkout@v4
+        with:
+          path: ember
+
+      - name: Prepare folders
+        shell: bash
+        run: |
+          mkdir -p /c/TBuild/ThirdParty /c/TBuild/Libraries
+          df -h /c
+
+      # Prepared libraries take hours. They are cached so that a re-run
+      # (after a timeout or a failure) continues from where it stopped.
+      - name: Restore libraries cache
+        id: libs
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            C:\TBuild\ThirdParty
+            C:\TBuild\Libraries
+          key: ember-win-libs-${{ env.UPSTREAM_VERSION }}-${{ github.run_id }}
+          restore-keys: |
+            ember-win-libs-${{ env.UPSTREAM_VERSION }}-
+
+      - name: Clone AyuGram Desktop with submodules
+        shell: bash
+        run: |
+          set -e
+          cd /c/TBuild
+          TAG=""
+          for ref in "v$UPSTREAM_VERSION" "$UPSTREAM_VERSION"; do
+            if git ls-remote --exit-code --tags "$UPSTREAM_REPO" "refs/tags/$ref" >/dev/null 2>&1; then
+              TAG="$ref"; break
+            fi
+          done
+          if [ -z "$TAG" ]; then
+            echo "::error::No tag for AyuGram Desktop $UPSTREAM_VERSION found."
+            exit 1
+          fi
+          git clone --recursive --branch "$TAG" "$UPSTREAM_REPO" tdesktop
+
+      - name: Apply Ember overlay
+        shell: bash
+        run: |
+          set -e
+          cd /c/TBuild
+          while read -r f; do f="${f%$'\r'}"; [ -n "$f" ] && rm -f "tdesktop/$f"; done < "$GITHUB_WORKSPACE/ember/ember-overlay/.deleted"
+          cp -a "$GITHUB_WORKSPACE/ember/ember-overlay/." tdesktop/
+          rm -f tdesktop/.deleted
+
+      - name: Set up MSVC (v143 toolset 14.44)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+          toolset: 14.44
+
+      - name: Prepare libraries (long)
+        timeout-minutes: 300
+        run: |
+          cd /d C:\TBuild
+          call tdesktop\Telegram\build\prepare\win.bat silent
+
+      - name: Save libraries cache
+        if: ${{ always() }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            C:\TBuild\ThirdParty
+            C:\TBuild\Libraries
+          key: ember-win-libs-${{ env.UPSTREAM_VERSION }}-${{ github.run_id }}
+
+      - name: Configure
+        run: |
+          cd /d C:\TBuild\tdesktop\Telegram
+          call configure.bat x64 -D TDESKTOP_API_ID=%API_ID% -D TDESKTOP_API_HASH=%API_HASH%
+
+      - name: Build
+        run: |
+          cd /d C:\TBuild\tdesktop\out
+          cmake --build . --config Release --target Telegram -- /m
+
+      - name: Collect
+        shell: bash
+        run: |
+          set -e
+          cd /c/TBuild/tdesktop/out/Release
+          ls -la
+          test -f Ember.exe
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp Ember.exe "$GITHUB_WORKSPACE/dist/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ember-windows-x64
+          path: dist/Ember.exe
+
+  release:
+    name: Publish release
+    if: ${{ github.event_name == 'push' }}
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/Ember.exe
+            artifacts/**/Ember-linux-x64.tar.gz
