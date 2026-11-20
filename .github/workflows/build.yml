@@ -70,7 +70,7 @@ jobs:
       - name: Apply Ember overlay
         run: |
           set -e
-          while read -r f; do [ -n "$f" ] && rm -f "tdesktop/$f"; done < ember/ember-overlay/.deleted
+          rm -f tdesktop/lib/xdg/com.ayugram.desktop.*
           cp -a ember/ember-overlay/. tdesktop/
           rm -f tdesktop/.deleted
           grep -n "Ember" tdesktop/Telegram/CMakeLists.txt | head -3
@@ -159,7 +159,7 @@ jobs:
         run: |
           set -e
           cd /c/TBuild
-          while read -r f; do f="${f%$'\r'}"; [ -n "$f" ] && rm -f "tdesktop/$f"; done < "$GITHUB_WORKSPACE/ember/ember-overlay/.deleted"
+          rm -f tdesktop/lib/xdg/com.ayugram.desktop.*
           cp -a "$GITHUB_WORKSPACE/ember/ember-overlay/." tdesktop/
           rm -f tdesktop/.deleted
 
