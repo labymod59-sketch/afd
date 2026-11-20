@@ -193,6 +193,17 @@ jobs:
           # mingw-w64-x86_64-diffutils no longer exists in MSYS2 repositories
           sed -i 's/mingw-w64-x86_64-diffutils/diffutils/' tdesktop/Telegram/build/prepare/prepare.py
           grep -n "diffutils" tdesktop/Telegram/build/prepare/prepare.py
+          # dump_syms (crash symbols) needs ATL, which the runner lacks, and is not needed for Ember
+          python - <<'PYEOF'
+          p = "tdesktop/Telegram/build/prepare/prepare.py"
+          out = []
+          for l in open(p, encoding="utf-8").read().split("\n"):
+              if "dump_syms" in l and "xcodeproj" not in l and "mac/dump_syms" not in l:
+                  continue
+              out.append(l)
+          open(p, "w", encoding="utf-8", newline="\n").write("\n".join(out))
+          PYEOF
+          grep -c "dump_syms" tdesktop/Telegram/build/prepare/prepare.py || true
 
       - name: Set up MSVC (v143 toolset 14.44)
         uses: ilammy/msvc-dev-cmd@v1
