@@ -49,9 +49,10 @@ jobs:
           path: ember
 
       - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          large-packages: false
 
       - name: Clone AyuGram Desktop with submodules
         run: |
@@ -75,14 +76,41 @@ jobs:
           rm -f tdesktop/.deleted
           grep -n "Ember" tdesktop/Telegram/CMakeLists.txt | head -3
 
+      # The prebuilt image of Telegram Desktop is older than AyuGram needs
+      # (no "ada" library), so the image is built from AyuGram's own Dockerfile.
+      - name: Generate Dockerfile
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-jinja2
+          cd tdesktop/Telegram/build/docker/centos_env
+          DEBUG= python3 gen_dockerfile.py > Dockerfile.new
+          mv Dockerfile.new Dockerfile
+          rm -rf __pycache__
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build libraries image (long on the first run)
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: tdesktop/Telegram/build/docker/centos_env
+          load: true
+          tags: tdesktop:centos_env
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Build
         run: |
           cd tdesktop
           docker run --rm \
             -u "$(id -u)" \
             -v "$PWD:/usr/src/tdesktop" \
-            ghcr.io/telegramdesktop/tdesktop/centos_env:latest \
+            -e CONFIG=Release \
+            tdesktop:centos_env \
             /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
+            -D CMAKE_CONFIGURATION_TYPES=Release \
             -D TDESKTOP_API_ID="$API_ID" \
             -D TDESKTOP_API_HASH="$API_HASH"
 
@@ -162,6 +190,9 @@ jobs:
           rm -f tdesktop/lib/xdg/com.ayugram.desktop.*
           cp -a "$GITHUB_WORKSPACE/ember/ember-overlay/." tdesktop/
           rm -f tdesktop/.deleted
+          # mingw-w64-x86_64-diffutils no longer exists in MSYS2 repositories
+          sed -i 's/mingw-w64-x86_64-diffutils/diffutils/' tdesktop/Telegram/build/prepare/prepare.py
+          grep -n "diffutils" tdesktop/Telegram/build/prepare/prepare.py
 
       - name: Set up MSVC (v143 toolset 14.44)
         uses: ilammy/msvc-dev-cmd@v1
