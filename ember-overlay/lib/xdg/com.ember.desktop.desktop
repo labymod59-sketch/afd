@@ -1,0 +1,22 @@
+[Desktop Entry]
+Name=Ember Desktop
+Comment=Ember - a black Telegram client based on AyuGram Desktop
+TryExec=Ember
+Exec=env DESKTOPINTEGRATION=1 Ember -- %U
+Icon=com.ember.desktop
+Terminal=false
+StartupWMClass=Ember
+Type=Application
+Categories=Chat;Network;InstantMessaging;Qt;
+MimeType=x-scheme-handler/tg;x-scheme-handler/tonsite;
+Keywords=tg;chat;im;messaging;messenger;sms;telegram;tdesktop;
+Actions=quit;
+DBusActivatable=true
+SingleMainWindow=true
+X-GNOME-UsesNotifications=true
+X-GNOME-SingleWindow=true
+
+[Desktop Action quit]
+Exec=Ember -quit
+Name=Quit Ember
+Icon=application-exit
